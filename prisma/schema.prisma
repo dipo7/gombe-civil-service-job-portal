@@ -1,0 +1,226 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DegreeType {
+  UNIVERSITY
+  POLYTECHNIC
+  NCE
+}
+
+// Ranking per DegreeType lives in src/lib/constants.ts
+enum DegreeClass {
+  FIRST_CLASS
+  SECOND_CLASS_UPPER
+  SECOND_CLASS_LOWER
+  THIRD_CLASS
+  PASS
+  DISTINCTION
+  UPPER_CREDIT
+  LOWER_CREDIT
+  CREDIT
+  MERIT
+}
+
+enum ApplicationStatus {
+  Pending
+  Screened_In
+  Screened_Out
+}
+
+enum DispatchStatus {
+  NotQueued
+  Queued
+  Sent
+  Failed
+}
+
+model Job {
+  id               String    @id @default(cuid())
+  title            String
+  department       String
+  description      String
+  responsibilities String[]
+  requirements     String[]
+  location         String    @default("Gombe, Gombe State")
+  isOpen           Boolean   @default(true)
+  closesAt         DateTime?
+
+  // Destination mailbox for screened-in applications. Never exposed to the public.
+  hrEmail String
+
+  // Verification rules
+  minAge             Int?
+  maxAge             Int?
+  requireGombeOrigin Boolean  @default(false)
+  allowedLgas        String[] // empty = any LGA
+
+  degreeRules  JobDegreeRule[]
+  applications Application[]
+
+  createdById String?
+  createdBy   AdminUser? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isOpen, department])
+}
+
+// One row per accepted degree type, with the minimum class for that type.
+model JobDegreeRule {
+  id       String      @id @default(cuid())
+  jobId    String
+  job      Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  type     DegreeType
+  minClass DegreeClass
+
+  @@unique([jobId, type])
+}
+
+model Application {
+  id String @id @default(cuid())
+
+  jobId String
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Restrict)
+
+  fullName String
+  email    String
+  phone    String
+
+  stateOfOrigin String
+  lga           String?
+  dateOfBirth   DateTime @db.Date
+
+  degreeType     DegreeType
+  degreeClass    DegreeClass
+  institution    String
+  course         String
+  graduationYear Int
+
+  // GCS object key (UUID-based). Bucket is private; no public URL is ever stored.
+  resumeKey      String
+  resumeFileName String
+  resumeMime     String
+  resumeSize     Int
+
+  status         ApplicationStatus @default(Pending)
+  // Internal-only audit trail of why a candidate was screened out.
+  screeningNotes String[]
+  dispatchStatus DispatchStatus    @default(NotQueued)
+  dispatchedAt   DateTime?
+
+  submittedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Human-readable id given to the applicant, e.g. GSC-7K4M2Q9X
+  reference String @unique
+
+  // Dedupe keys: aliases (a.b+1@gmail.com) and phone formats collapse to one value.
+  emailCanonical  String
+  phoneNormalized String
+
+  emailVerifiedAt    DateTime
+  consentAt          DateTime
+  consentVersion     String
+  declarationAt      DateTime
+  confirmationSentAt DateTime?
+
+  // HR workflow (separate from automated screening)
+  hrDecision            HrDecision @default(Undecided)
+  hrDecidedAt           DateTime?
+  hrDecidedByEmail      String?
+  screeningOverriddenAt DateTime?
+  screeningOverriddenBy String?
+
+  documents ApplicationDocument[]
+  notes     ApplicationNote[]
+
+  @@unique([jobId, emailCanonical])
+  @@unique([jobId, phoneNormalized])
+  @@index([jobId, status])
+  @@index([jobId, hrDecision])
+  @@index([status])
+  @@index([dispatchStatus])
+  @@index([submittedAt])
+}
+
+enum HrDecision {
+  Undecided
+  Shortlisted
+  Rejected
+}
+
+enum DocumentType {
+  DegreeCertificate
+  NyscCertificate
+  OriginLetter
+}
+
+model ApplicationDocument {
+  id            String       @id @default(cuid())
+  applicationId String
+  application   Application  @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  type          DocumentType
+  key           String
+  fileName      String
+  mime          String
+  size          Int
+
+  @@unique([applicationId, type])
+}
+
+model ApplicationNote {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  authorEmail   String
+  body          String
+  createdAt     DateTime    @default(now())
+
+  @@index([applicationId])
+}
+
+// Who accessed or changed what. adminEmail is a snapshot so entries survive admin removal.
+model AuditLog {
+  id         String   @id @default(cuid())
+  adminEmail String
+  action     String
+  entityType String?
+  entityId   String?
+  details    String?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entityType, entityId])
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  sessions AdminSession[]
+  jobs     Job[]
+}
+
+// Only a SHA-256 hash of the session token is stored.
+model AdminSession {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  adminId   String
+  admin     AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  @@index([adminId])
+  @@index([expiresAt])
+}

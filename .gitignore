@@ -1,0 +1,20 @@
+# dependencies and build output
+node_modules
+.next
+out
+coverage
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets: only the *.example templates are tracked
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# local storage-emulator data (keep the bucket directory itself)
+dev/gcs/*/*
+!dev/gcs/*/.keep
+
+.DS_Store
+npm-debug.log*

@@ -1,0 +1,89 @@
+name: gombe-portal
+
+# Pilot stack for one VM. No ports are published: traffic enters only through the Cloudflare Tunnel.
+x-app-env: &app-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://gombe:${POSTGRES_PASSWORD}@postgres:5432/gombejobs?schema=public
+  REDIS_URL: redis://redis:6379
+  CLAMAV_HOST: clamav
+  CLAMAV_PORT: "3310"
+  GCS_BUCKET: ${GCS_BUCKET:-gombecivilservice-resumes}
+  GCS_PROJECT_ID: ${GCS_PROJECT_ID:-gombecivilservice}
+  GCS_API_ENDPOINT: ${GCS_API_ENDPOINT-http://gcs:4443}
+  GCS_CREDENTIALS_JSON: ${GCS_CREDENTIALS_JSON:-}
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+    command: sh -c "npx prisma migrate deploy && npm start"
+    env_file: .env.prod
+    environment: *app-env
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/privacy').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+    command: npm run worker:prod
+    env_file: .env.prod
+    environment: *app-env
+    depends_on:
+      app: { condition: service_healthy }
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gombe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: gombejobs
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gombe -d gombejobs"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redisdata:/data"]
+    restart: unless-stopped
+
+  # Pilot file storage. Each ./dev/gcs/<name>/ directory is a bucket. Use real GCS by setting
+  # GCS_API_ENDPOINT= (empty) and GCS_CREDENTIALS_JSON in .env.prod, then drop this service.
+  gcs:
+    image: fsouza/fake-gcs-server
+    command: ["-scheme", "http", "-port", "4443", "-external-url", "http://gcs:4443", "-data", "/data"]
+    volumes: ["./dev/gcs:/data"]
+    restart: unless-stopped
+
+  clamav:
+    image: clamav/clamav:stable
+    volumes: ["clamdb:/var/lib/clamav"]
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      app: { condition: service_healthy }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  clamdb:

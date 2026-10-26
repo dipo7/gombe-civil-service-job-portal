@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gombe
+      POSTGRES_PASSWORD: gombe
+      POSTGRES_DB: gombejobs
+    ports: ["5434:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6380:6379"]
+
+  # GCS emulator; each ./dev/gcs/<name>/ directory is a pre-created bucket
+  gcs:
+    image: fsouza/fake-gcs-server
+    command: ["-scheme", "http", "-port", "4443", "-external-url", "http://localhost:4443"]
+    ports: ["4443:4443"]
+    volumes: ["./dev/gcs:/data"]
+
+  clamav:
+    image: clamav/clamav:stable
+    # No arm64 manifest published for this tag; runs under emulation on Apple Silicon.
+    platform: linux/amd64
+    ports: ["3310:3310"]
+
+  mailpit:
+    image: axllent/mailpit
+    ports: ["1025:1025", "8025:8025"]
+
+volumes:
+  pgdata:
